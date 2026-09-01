@@ -1,0 +1,60 @@
+{
+  "business_date": "2026-07-06",
+  "seed": 7,
+  "sources": {
+    "bank": {
+      "EUR": {
+        "rows": 229,
+        "sum_amount_minor": 53603171
+      },
+      "GBP": {
+        "rows": 233,
+        "sum_amount_minor": 60555026
+      },
+      "JPY": {
+        "rows": 267,
+        "sum_amount_minor": 68060645
+      },
+      "USD": {
+        "rows": 260,
+        "sum_amount_minor": 58917999
+      }
+    },
+    "internal": {
+      "EUR": {
+        "rows": 232,
+        "sum_amount_minor": 54383854
+      },
+      "GBP": {
+        "rows": 234,
+        "sum_amount_minor": 60807558
+      },
+      "JPY": {
+        "rows": 269,
+        "sum_amount_minor": 68241748
+      },
+      "USD": {
+        "rows": 265,
+        "sum_amount_minor": 60533199
+      }
+    },
+    "processor": {
+      "EUR": {
+        "rows": 237,
+        "sum_amount_minor": 56032916
+      },
+      "GBP": {
+        "rows": 232,
+        "sum_amount_minor": 60671923
+      },
+      "JPY": {
+        "rows": 267,
+        "sum_amount_minor": 67379678
+      },
+      "USD": {
+        "rows": 267,
+        "sum_amount_minor": 60830833
+      }
+    }
+  }
+}

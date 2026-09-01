@@ -1,0 +1,7 @@
+# Installed on DAY 2, not Day 1. great_expectations 0.18.x drags in a large,
+# opinionated dependency tree (marshmallow, altair, jinja2, ruamel) and is the
+# most likely thing to fight the pins above. Keeping it out of the Day-1 install
+# means a GE resolver failure cannot block the day the oracle gets built.
+# If it downgrades pandas/numpy, install it into its own venv and call
+# run_checkpoint.py by absolute path (same process-boundary pattern as Airflow).
+great_expectations==0.18.19

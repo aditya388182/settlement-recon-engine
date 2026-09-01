@@ -1,0 +1,11 @@
+# Engine venv (.venv-spark). Python 3.11 only — pyspark 3.5.1 has no 3.12 wheels.
+pyspark==3.5.1
+delta-spark==3.1.0
+pandas==2.2.2
+pyarrow==15.0.2
+numpy==1.26.4
+scipy==1.13.1
+boto3==1.34.131
+pyyaml==6.0.1
+pytest==8.2.2
+requests==2.32.3

@@ -1,0 +1,22 @@
+__pycache__/
+*.pyc
+.venv-spark/
+.venv-airflow/
+checkpoints/
+metastore_db/
+spark-warehouse/
+derby.log
+*.jar
+airflow_home/
+.env
+.DS_Store
+.ivy2/
+.pytest_cache/
+# generated fixtures for the full dataset are reproducible from the seed;
+# only the small CI fixture is committed (CI must run hermetically)
+data/fixtures/internal_*.csv
+data/fixtures/processor_*.csv
+data/fixtures/bank_*.csv
+data/fixtures/answer_key_*.csv
+data/fixtures/control_line_*.json
+!data/fixtures/ci_mini/**

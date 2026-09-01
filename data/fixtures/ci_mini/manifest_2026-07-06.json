@@ -1,0 +1,17 @@
+{
+  "business_date": "2026-07-06",
+  "files": {
+    "bank_2026-07-06.csv": {
+      "rows": 989,
+      "sha256": "bf6659b27a94b4826d8c628d7f288297880f25b490916e4b7bfccf82597ab86b"
+    },
+    "internal_2026-07-06.csv": {
+      "rows": 1000,
+      "sha256": "c72d281a6a908f3fb2bb0f795c22c3e9564ad622997c650f3a38e37c8e587000"
+    },
+    "processor_2026-07-06.csv": {
+      "rows": 1003,
+      "sha256": "81855d5497b6ec0fa794e982cd5b29932124a4f6bf6810c4934f779b031756c5"
+    }
+  }
+}
