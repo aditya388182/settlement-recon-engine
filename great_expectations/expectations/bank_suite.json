@@ -1,0 +1,109 @@
+{
+  "expectation_suite_name": "bank_suite",
+  "ge_cloud_id": null,
+  "meta": {
+    "great_expectations_version": "0.18.19",
+    "notes": "Static expectations only. Row-count band, business-date window and the file SHA256 are added at runtime by run_checkpoint.py because they depend on --date and the manifest."
+  },
+  "data_asset_type": null,
+  "expectations": [
+    {
+      "expectation_type": "expect_table_columns_to_match_ordered_list",
+      "kwargs": {
+        "column_list": [
+          "txn_uid",
+          "business_date",
+          "txn_ref",
+          "net_amount_minor",
+          "currency",
+          "side",
+          "source_system",
+          "event_ts"
+        ]
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "txn_uid"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "txn_ref"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "business_date"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_not_be_null",
+      "kwargs": {
+        "column": "net_amount_minor"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_unique",
+      "kwargs": {
+        "column": "txn_uid"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "currency",
+        "value_set": [
+          "USD",
+          "EUR",
+          "GBP",
+          "JPY"
+        ]
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_be_in_set",
+      "kwargs": {
+        "column": "source_system",
+        "value_set": [
+          "BANK"
+        ]
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "net_amount_minor",
+        "regex": "^[0-9]+$"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "business_date",
+        "regex": "^\\d{4}-\\d{2}-\\d{2}$"
+      },
+      "meta": {}
+    },
+    {
+      "expectation_type": "expect_column_values_to_match_regex",
+      "kwargs": {
+        "column": "txn_ref",
+        "regex": "^M\\d{3}-"
+      },
+      "meta": {}
+    }
+  ]
+}

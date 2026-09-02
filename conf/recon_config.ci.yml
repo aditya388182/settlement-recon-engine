@@ -1,0 +1,67 @@
+# CI overlay. Identical semantics to conf/recon_config.yml, but every path is on
+# the local filesystem: CI job 2 runs the whole engine on the committed ci_mini
+# fixture with no MinIO, no Postgres and no network. The engine already takes
+# paths from config, so this is a second config file rather than an environment
+# branch inside the job.
+run:
+  rng_seed: 42
+  business_date: "2026-07-06"
+
+matching:
+  settlement_window_days: 2
+  ambiguity_density_threshold: 2.0
+  block_prefix_len_default: 4
+  block_prefix_len_hot: 8
+  hot_counterparties: []
+
+reference_data:
+  version: "v1"
+  valid_from: "2026-07-01"
+  valid_to: "9999-12-31"
+  epsilon_minor: 1
+  fee_schedule:
+    USD: { rate_bps: 290, max_fee_minor: 300 }
+    EUR: { rate_bps: 290, max_fee_minor: 300 }
+    GBP: { rate_bps: 290, max_fee_minor: 250 }
+    JPY: { rate_bps: 290, max_fee_minor: 400 }
+  fx_precision:
+    USD: { decimals: 2, fx_rounding_minor: 1 }
+    EUR: { decimals: 2, fx_rounding_minor: 1 }
+    GBP: { decimals: 2, fx_rounding_minor: 1 }
+    JPY: { decimals: 0, fx_rounding_minor: 1 }
+
+generator:
+  currencies: [USD, EUR, GBP, JPY]
+  merchant_count: 25
+  main_merchants: [M001, M002, M003, M004, M005, M006, M007, M008, M009, M010,
+                   M011, M012, M013, M014, M015, M016, M017, M018, M019, M020]
+  trap_merchants: [M021, M022]
+  dense_merchants: [M023, M024, M025]
+  amount_min_minor: 500
+  amount_max_minor: 500000
+  m2m_trap_groups: 4
+  dense_blocks: 1
+  bank_ref_mode: "shared"
+  rates:
+    amount_mismatch: 0.05
+    missing_in_processor: 0.01
+    missing_in_bank: 0.01
+    duplicate: 0.01
+    timing_difference: 0.03
+
+paths:
+  landing: "file:///tmp/ci/landing"
+  lake: "file:///tmp/ci/lake"
+  canonical: "file:///tmp/ci/lake/canonical"
+  reference_data: "file:///tmp/ci/lake/reference_data"
+  recon_output: "file:///tmp/ci/lake/recon_output"
+  recon_summary: "file:///tmp/ci/lake/recon_summary"
+
+storage:
+  format: "delta"
+
+spark:
+  shuffle_partitions: 4
+  s3_endpoint: "http://localhost:9000"
+  s3_access_key: "minioadmin"
+  s3_secret_key: "minioadmin"
