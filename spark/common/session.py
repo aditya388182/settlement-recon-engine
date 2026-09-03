@@ -4,13 +4,10 @@ import os
 import yaml
 from pyspark.sql import SparkSession
 
-REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+REPO_ROOT = os.path.dirname(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+)
 DEFAULT_CONFIG = os.path.join(REPO_ROOT, "conf", "recon_config.yml")
-
-# Pinned for PySpark 3.5.1. delta-spark 3.1.0 targets Spark 3.5; hadoop-aws must
-# match the Hadoop version Spark 3.5.1 is built against (3.3.4), and the AWS SDK
-# must match hadoop-aws 3.3.4 (1.12.262). Do not "upgrade" any one of the three
-# on its own.
 DELTA_PACKAGE = "io.delta:delta-spark_2.12:3.1.0"
 HADOOP_AWS_PACKAGE = "org.apache.hadoop:hadoop-aws:3.3.4"
 AWS_SDK_PACKAGE = "com.amazonaws:aws-java-sdk-bundle:1.12.262"
@@ -54,6 +51,7 @@ def build_spark(app_name: str, cfg: dict | None = None) -> SparkSession:
     cfg = cfg or load_config()
     s = cfg["spark"]
     packages, extra = _packages_and_conf(cfg)
+
     builder = (
         SparkSession.builder
         .appName(app_name)
@@ -62,11 +60,19 @@ def build_spark(app_name: str, cfg: dict | None = None) -> SparkSession:
         .config("spark.sql.execution.arrow.pyspark.enabled", "true")
         # session-scoped UTC: the canonical schema stores UTC and nothing else
         .config("spark.sql.session.timeZone", "UTC")
+        # Spark memory settings
+        .config("spark.driver.memory", "4g")
+        .config("spark.executor.memory", "4g")
+        .config("spark.driver.maxResultSize", "2g")
     )
+
     if packages:
         builder = builder.config("spark.jars.packages", packages)
+
     for k, v in extra.items():
         builder = builder.config(k, v)
+
     spark = builder.getOrCreate()
     spark.sparkContext.setLogLevel("WARN")
+
     return spark

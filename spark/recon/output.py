@@ -5,19 +5,12 @@ from pyspark.sql import DataFrame
 from spark.common.io import storage_format
 
 OUTPUT_COLS = [
-    "business_date",        # run date == partition key
-    "source_system",
-    "leg",
-    "txn_uid",
-    "txn_ref",
-    "amount_minor",
-    "currency",
-    "row_business_date",    # the source row's own date
-    "match_state",
-    "counterpart_txn_uid",
-    "counterpart_ref",
-    "block_key",
-    "run_ts",
+    "business_date", "source_system", "leg", "txn_uid", "txn_ref",
+    "amount_minor", "currency", "row_business_date", "match_state",
+    "counterpart_txn_uid", "counterpart_ref",
+    "amount_diff", "fee_residual", "date_diff", "score",
+    "method", "tier", "hungarian_cost", "candidate_count",
+    "tolerance_applied", "block_key", "run_ts",
 ]
 
 

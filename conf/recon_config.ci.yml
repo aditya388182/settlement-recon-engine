@@ -18,6 +18,7 @@ reference_data:
   version: "v1"
   valid_from: "2026-07-01"
   valid_to: "9999-12-31"
+  fee_jitter_max: 8
   epsilon_minor: 1
   fee_schedule:
     USD: { rate_bps: 290, max_fee_minor: 300 }
