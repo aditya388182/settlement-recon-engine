@@ -53,7 +53,8 @@ generator:
   amount_max_minor: 500000
   m2m_trap_groups: 20
   dense_blocks: 3
-  bank_ref_mode: "shared"            # shared = bank carries the internal txn_ref (plan default)
+  bank_ref_mode: "shared" 
+  bank_ref_blind_rate: 0.08           # shared = bank carries the internal txn_ref (plan default)
                                      # batch  = bank carries "<MERCHANT>-B<7hex>" settlement ref
   rates:
     amount_mismatch: 0.05

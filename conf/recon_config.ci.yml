@@ -43,6 +43,7 @@ generator:
   m2m_trap_groups: 4
   dense_blocks: 1
   bank_ref_mode: "shared"
+  bank_ref_blind_rate: 0.08
   rates:
     amount_mismatch: 0.05
     missing_in_processor: 0.01
