@@ -1,38 +1,4 @@
 #!/usr/bin/env python3
-"""
-seed_generator.py — the oracle.
-
-TRUTH-FIRST DESIGN
-------------------
-Project 1 had Postgres as ground truth. Here there is no external oracle, so we
-manufacture one: build a clean truth table first, then DERIVE three deliberately
-asymmetric views of it (internal gross / processor gross+fee / bank net), then
-apply seeded perturbations, recording every single one in a machine-readable
-answer key. Every correctness claim from Day 2 onward is an assertion against
-that key, never an eyeball check.
-
-If this file is wrong, every green check downstream is a lie. It therefore
-self-verifies its own hardest construction (the dense ambiguity blocks) with
-scipy before writing anything.
-
-MONEY
------
-Integer minor units end to end. No float is constructed anywhere in this file
-except inside verify_dense_blocks(), which only *ranks* candidates and writes
-nothing. JPY minor unit is the yen (zero decimals).
-
-DETERMINISM
------------
-One random.Random(seed) instance drives everything. No module-level random.*.
-Two runs with the same --seed produce byte-identical CSVs, answer key and
-control line.
-
-USAGE
-    python scripts/seed_generator.py --date 2026-07-06 --rows 10000 --seed 42 \
-        --out data/fixtures/
-    python scripts/seed_generator.py --date 2026-07-06 --rows 1000 --seed 7 \
-        --trap-groups 4 --dense-blocks 1 --out data/fixtures/ci_mini/
-"""
 from __future__ import annotations
 
 import argparse
@@ -73,9 +39,7 @@ ANSWER_KEY_COLS = ["txn_uid", "source_system", "leg", "expected_class",
                    "dense_block_id"]
 
 
-# --------------------------------------------------------------------------
-# config + money helpers (shared with the engine — never duplicate these numbers)
-# --------------------------------------------------------------------------
+
 def load_config(path: str) -> dict:
     with open(path, "r", encoding="utf-8") as fh:
         return yaml.safe_load(fh)
@@ -89,17 +53,28 @@ def fee_minor(gross_minor: int, currency: str, cfg: dict) -> int:
 
 
 def total_tolerance(currency: str, cfg: dict) -> int:
-    """max_fee_minor + fx_rounding_minor + epsilon. Engine derives the identical
-    value from reference_data on Day 3; both read this config block."""
+    """max_fee + fee_jitter_max + fx_rounding + epsilon. The engine derives the
+    identical value from reference_data on Day 3; both read this config block."""
     rd = cfg["reference_data"]
     return (rd["fee_schedule"][currency]["max_fee_minor"]
+            + rd.get("fee_jitter_max", 0)
             + rd["fx_precision"][currency]["fx_rounding_minor"]
             + rd["epsilon_minor"])
 
 
-# --------------------------------------------------------------------------
-# truth model
-# --------------------------------------------------------------------------
+def expected_net(gross_minor: int, currency: str, cfg: dict) -> int:
+    """What the fee MODEL predicts the bank will deposit. The matcher can compute
+    this too, from the same reference data — which is the point."""
+    return gross_minor - fee_minor(gross_minor, currency, cfg)
+
+
+def actual_fee(gross_minor: int, currency: str, cfg: dict, jitter: int) -> int:
+    """What the processor ACTUALLY charged: the modelled fee plus settlement
+    noise the model cannot predict (rounding, tiering, FX). The residual left
+    over after the model is applied is exactly this jitter, and it is what makes
+    tolerant matching a real problem instead of an arithmetic identity."""
+    return fee_minor(gross_minor, currency, cfg) + jitter
+
 @dataclass
 class TruthTxn:
     seq: int
@@ -115,6 +90,7 @@ class TruthTxn:
     trap_group_id: str = ""             # m2m trap membership
     dense_block_id: str = ""            # dense ambiguity block membership
     dense_role: str = ""                # BAND | CHAIN_A | CHAIN_B
+    fee_jitter: int = 0                 # settlement noise on top of the modelled fee
     origin: str = "MAIN"                # MAIN | TRAP | DENSE
 
 
@@ -142,9 +118,7 @@ def make_event_ts(biz_date: date, rng: random.Random) -> str:
             + timedelta(seconds=secs)).strftime("%Y-%m-%d %H:%M:%S")
 
 
-# --------------------------------------------------------------------------
-# population builders
-# --------------------------------------------------------------------------
+
 def build_main_population(n: int, base_date: date, cfg: dict,
                           rng: random.Random) -> List[TruthTxn]:
     g = cfg["generator"]
@@ -178,6 +152,7 @@ def build_main_population(n: int, base_date: date, cfg: dict,
                 break
         if t.fate == TIMING_DIFFERENCE:
             t.bank_date_shift = rng.choice([1, 2])
+        t.fee_jitter = rng.randrange(0, int(cfg["reference_data"].get("fee_jitter_max", 0)) + 1)
         if t.fate == AMOUNT_MISMATCH:
             # MUST land beyond tolerance, or the exact/tolerant pass would match
             # it and the answer key would be wrong. Tolerance comes from the same
@@ -218,12 +193,17 @@ def build_trap_groups(n_groups: int, base_date: date, cfg: dict,
         # spaced far apart so no candidate edges form BETWEEN groups
         gross = 20000 + 10000 * grp
         gid = f"TRAP-{grp:03d}"
+        # ONE jitter for the whole group: if the two members had different
+        # settlement noise the matcher could tell them apart and the trap would
+        # stop being a trap.
+        jitter = rng.randrange(0, int(cfg["reference_data"].get("fee_jitter_max", 0)) + 1)
         for _ in range(2):
             out.append(TruthTxn(seq=seq, merchant=merchant, currency=currency,
                                 gross_minor=gross, biz_date=base_date,
                                 event_ts=make_event_ts(base_date, rng),
                                 txn_ref=make_ref(merchant, rng),
-                                trap_group_id=gid, origin="TRAP"))
+                                trap_group_id=gid, origin="TRAP",
+                                fee_jitter=jitter))
             seq += 1
     return out
 
@@ -232,98 +212,122 @@ def build_dense_blocks(n_blocks: int, base_date: date, cfg: dict,
                        rng: random.Random, seq_start: int) -> List[TruthTxn]:
     """Blocks where GREEDY PROVABLY LOSES to the optimal assignment.
 
-    Each block = 6 'band' rows + a 2-row 'chain' trap, all on the bank leg
-    (the only leg where a true pair's amounts differ, by exactly the fee).
+    The matcher ranks bank-leg candidates on what the FEE MODEL CANNOT EXPLAIN:
 
-      band  — six small transactions spaced 150 minor units apart. Their fees
-              (29..50) are far smaller than the spacing, so every true pair is
-              also the nearest pair: greedy and optimal agree here. The band
-              exists solely to push candidate density above the 2.0 threshold.
+        residual(i, j) = | bank_net_j - (gross_i - modelled_fee(gross_i)) |
 
-      chain — two transactions positioned so that a WRONG edge (diff 100) scores
-              higher than either true edge (diffs 166 and 174), while the second
-              transaction's own settlement sits beyond tolerance (diff 440) and
-              is therefore not a candidate at all. Greedy grabs the wrong edge
-              first, strands the second transaction, and ends the block one pair
-              short. The optimal assignment takes both true edges, because
-              1/167 + 1/175 > 1/101.
+    For a true pair that residual is exactly the settlement jitter. So ambiguity
+    is only possible where the jitter is large enough to make a wrong pair look
+    better than a right one, and that is what these blocks construct.
 
-    Numbers are derived from the config's fee schedule, not hardcoded, and the
-    whole construction is asserted with scipy before anything is written.
+      band  — six transactions spaced 150 minor units apart. Cross-pair
+              residuals are ~150 while true-pair residuals are the jitter (<= 8),
+              so greedy and the optimal assignment agree here. The band exists
+              only to push candidate density above the threshold.
+
+      chain — two transactions, A and B, both carrying the maximum jitter J.
+              B sits DELTA minor units above A, chosen so that:
+
+                residual(A, b) = |DELTA - J|   < J = residual(A, a)
+                    -> the wrong edge outscores both true edges, so greedy
+                       takes it first
+                raw(B, a) = DELTA + max_fee + J > total_tolerance
+                    -> B's own settlement is not even a candidate for it once
+                       a is gone, so greedy strands B and ends the block a pair
+                       short
+                1/(1+J) + 1/(1+J) > 1/(1+|DELTA-J|)
+                    -> the optimal assignment, which is the truth, wins. A
+                       non-candidate cell costs a prohibitive 10.0 against at
+                       most 1.0 for any real edge, so the assignment maximises
+                       matched pairs first and only then minimises cost: two
+                       true pairs beat one wrong pair plus a stranded record
+
+    Every one of those is asserted below, and then the whole block is re-checked
+    against scipy in verify_dense_blocks() before a single CSV is written.
     """
     g = cfg["generator"]
     merchants = g["dense_merchants"]
     currency = "USD"
+    jitter_max = int(cfg["reference_data"].get("fee_jitter_max", 0))
     out: List[TruthTxn] = []
     seq = seq_start
     for b in range(n_blocks):
         merchant = merchants[b % len(merchants)]
         bid = f"DENSE-{b:02d}"
+        tol = total_tolerance(currency, cfg)
+        max_fee = cfg["reference_data"]["fee_schedule"][currency]["max_fee_minor"]
 
-        # --- band: fee must stay well under half the spacing -----------------
         spacing = 150
+        band_base = 100000                      # large enough that the fee caps
+        assert fee_minor(band_base, currency, cfg) == max_fee, \
+            "band amounts must sit above the fee cap so cross residuals are the spacing"
         for k in range(6):
-            gross = 1000 + spacing * k
-            assert fee_minor(gross, currency, cfg) * 2 < spacing, \
-                "band fee too large — true pair would stop being the nearest pair"
+            gross = band_base + spacing * k
             out.append(TruthTxn(seq=seq, merchant=merchant, currency=currency,
                                 gross_minor=gross, biz_date=base_date,
                                 event_ts=make_event_ts(base_date, rng),
                                 txn_ref=make_ref(merchant, rng),
                                 dense_block_id=bid, dense_role="BAND",
-                                origin="DENSE"))
+                                origin="DENSE", fee_jitter=k % 3))
             seq += 1
 
-        # --- chain: the pair greedy gets wrong -------------------------------
-        tol = total_tolerance(currency, cfg)
-        g_b = 6000                                   # CHAIN_B
-        fee_b = fee_minor(g_b, currency, cfg)        # 174
-        g_a = g_b - 100 - fee_b                      # CHAIN_A -> d(A, net_B)=100
-        fee_a = fee_minor(g_a, currency, cfg)        # 166
-        d_wrong = abs(g_a - (g_b - fee_b))           # 100  (tempting, wrong)
-        d_true_a = fee_a                             # 166
-        d_true_b = fee_b                             # 174
-        d_far = abs(g_b - (g_a - fee_a))             # 440  (beyond tolerance)
-        assert d_wrong < d_true_a and d_wrong < d_true_b, "greedy would not be tempted"
-        assert d_far > tol, "chain B would keep a second candidate and never strand"
-        assert (1.0 / (1 + d_true_a)) + (1.0 / (1 + d_true_b)) > 1.0 / (1 + d_wrong), \
-            "optimal assignment would not beat greedy on total score"
+        j = jitter_max
+        delta = 2 * j - 3                       # -> residual(A,b) = |delta-j| = j-3
+        g_a = 200000
+        g_b = g_a + delta
+        assert fee_minor(g_a, currency, cfg) == max_fee, "chain must sit above the cap"
+        r_true = j                              # residual(A,a) = residual(B,b) = j
+        r_wrong = abs(delta - j)                # residual(A,b)
+        raw_true = max_fee + j                  # |gross - net| for a true pair
+        raw_ba = delta + max_fee + j            # |gross_B - net_a|
+        assert r_wrong < r_true, "greedy would not be tempted by the wrong edge"
+        assert raw_true <= tol, "a true pair would fall outside tolerance"
+        assert raw_ba > tol, "B would keep a second candidate and never be stranded"
+        assert 2.0 / (1 + r_true) > 1.0 / (1 + r_wrong), \
+            "the optimal assignment would not beat greedy"
         for role, gross in (("CHAIN_A", g_a), ("CHAIN_B", g_b)):
             out.append(TruthTxn(seq=seq, merchant=merchant, currency=currency,
                                 gross_minor=gross, biz_date=base_date,
                                 event_ts=make_event_ts(base_date, rng),
                                 txn_ref=make_ref(merchant, rng),
                                 dense_block_id=bid, dense_role=role,
-                                origin="DENSE"))
+                                origin="DENSE", fee_jitter=j))
             seq += 1
     return out
 
 
-# --------------------------------------------------------------------------
-# derive the three views + the answer key
-# --------------------------------------------------------------------------
+
 def derive(truth: List[TruthTxn], cfg: dict, rng: random.Random) -> Emitted:
     em = Emitted()
     bank_ref_mode = cfg["generator"]["bank_ref_mode"]
+    blind_rate = float(cfg["generator"].get("bank_ref_blind_rate", 0.0))
 
     for t in truth:
         iu = f"INT-{t.seq:07d}"
         pu = f"PRC-{t.seq:07d}"
         bu = f"BNK-{t.seq:07d}"
-        fee = fee_minor(t.gross_minor, t.currency, cfg)
+        fee = actual_fee(t.gross_minor, t.currency, cfg, t.fee_jitter)
         net = t.gross_minor - fee
         bank_date = t.biz_date + timedelta(days=t.bank_date_shift)
-        bank_ref = (t.txn_ref if bank_ref_mode == "shared"
-                    else f"{t.merchant}-B{hex8(rng)[:7]}")
+        # Ref blinding. Real bank statements often carry a settlement/batch
+        # reference rather than the processor's transaction id, so a share of
+        # bank rows cannot be matched by ref at all and must be reconciled on
+        # economic attributes (amount + date). That population is where the
+        # tolerant matcher, the m:n traps and the Hungarian fallback live.
+        # Trap and dense-block rows are ALWAYS blinded: if they kept the ref,
+        # the ref-anchored pass would resolve them and the demo would prove
+        # nothing. The merchant prefix is preserved so blocking still works.
+        blind = (bank_ref_mode == "batch"
+                 or bool(t.trap_group_id) or bool(t.dense_block_id)
+                 or rng.random() < blind_rate)
+        bank_ref = (f"{t.merchant}-B{hex8(rng)[:7]}" if blind else t.txn_ref)
 
-        # ---- internal: the spine, always present, always gross, always on D --
         em.internal.append({
             "txn_uid": iu, "business_date": t.biz_date.isoformat(),
             "txn_ref": t.txn_ref, "amount_minor": str(t.gross_minor),
             "currency": t.currency, "side": "DEBIT",
             "source_system": "INTERNAL", "event_ts": t.event_ts})
 
-        # ---- processor leg ---------------------------------------------------
         proc_class = MATCHED
         if t.fate == MISSING_IN_PROCESSOR:
             proc_class = MISSING_IN_PROCESSOR
@@ -350,7 +354,6 @@ def derive(truth: List[TruthTxn], cfg: dict, rng: random.Random) -> Emitted:
         em.answer_key.append(ak(iu, "INTERNAL", LEG_PROCESSOR, proc_class,
                                 t.txn_ref, t))
 
-        # ---- bank leg --------------------------------------------------------
         if t.fate == MISSING_IN_BANK:
             bank_class = MISSING_IN_BANK
         else:
@@ -391,9 +394,6 @@ def ak(txn_uid: str, source: str, leg: str, klass: str,
     }
 
 
-# --------------------------------------------------------------------------
-# oracle self-verification: does greedy actually lose in the dense blocks?
-# --------------------------------------------------------------------------
 def _greedy(edges: List[Tuple[str, str, int]]) -> List[Tuple[str, str]]:
     """Same rule as spark/recon/resolver.py: score desc, then BOTH refs asc,
     stable sort, first-come-first-served."""
@@ -421,8 +421,10 @@ def _optimal(edges: List[Tuple[str, str, int]]) -> List[Tuple[str, str]]:
 
 
 def verify_dense_blocks(truth: List[TruthTxn], cfg: dict) -> List[dict]:
-    """Build the exact candidate set the engine will build for each dense block,
-    then assert: density > threshold, optimal == truth, greedy != truth."""
+    """Rebuild the exact candidate set the engine will build for each dense
+    block — raw-diff FILTER, fee-residual SCORE — then assert: density above the
+    threshold, optimal == truth, greedy != truth. A demo is only a demo if
+    greedy loses, so the generator refuses to emit data where it doesn't."""
     threshold = cfg["matching"]["ambiguity_density_threshold"]
     report = []
     blocks: Dict[str, List[TruthTxn]] = {}
@@ -431,15 +433,20 @@ def verify_dense_blocks(truth: List[TruthTxn], cfg: dict) -> List[dict]:
             blocks.setdefault(t.dense_block_id, []).append(t)
 
     for bid, rows in sorted(blocks.items()):
-        tol = total_tolerance(rows[0].currency, cfg)
-        internals = [(t.txn_ref, t.gross_minor) for t in rows]
-        banks = [(t.txn_ref, t.gross_minor - fee_minor(t.gross_minor, t.currency, cfg))
+        ccy = rows[0].currency
+        tol = total_tolerance(ccy, cfg)
+        internals = [(t.txn_ref, t.gross_minor, expected_net(t.gross_minor, ccy, cfg))
+                     for t in rows]
+        banks = [(t.txn_ref,
+                  t.gross_minor - actual_fee(t.gross_minor, ccy, cfg, t.fee_jitter))
                  for t in rows]
-        edges = [(lr, rr, abs(lg - rn))
-                 for lr, lg in internals for rr, rn in banks
-                 if abs(lg - rn) <= tol]
+        edges = []
+        for lr, lg, len_ in internals:
+            for rr, rn in banks:
+                if abs(lg - rn) <= tol:                 # FILTER: raw gross/net gap
+                    edges.append((lr, rr, abs(rn - len_)))  # SCORE: fee residual
         density = len(edges) / max(min(len(internals), len(banks)), 1)
-        truth_pairs = sorted((r, r) for r, _ in internals)
+        truth_pairs = sorted((r, r) for r, _, _ in internals)
         g = _greedy(edges)
         o = _optimal(edges)
         assert density > threshold, f"{bid}: density {density} <= {threshold}"
@@ -453,8 +460,10 @@ def verify_dense_blocks(truth: List[TruthTxn], cfg: dict) -> List[dict]:
 
 def verify_traps(truth: List[TruthTxn], cfg: dict) -> List[dict]:
     """Each trap group must present exactly 2x2 candidates, all four within
-    tolerance, and must NOT trip the Hungarian threshold (density is exactly
-    2.0, and the threshold is a strict >)."""
+    tolerance and all four carrying an IDENTICAL score, and must not trip the
+    ambiguity threshold (density is exactly 2.0, and the threshold is a strict
+    greater-than). Identical scores are the point: the group is decided by the
+    tie-break rule, not by the data."""
     threshold = cfg["matching"]["ambiguity_density_threshold"]
     groups: Dict[str, List[TruthTxn]] = {}
     for t in truth:
@@ -463,23 +472,25 @@ def verify_traps(truth: List[TruthTxn], cfg: dict) -> List[dict]:
     report = []
     for gid, rows in sorted(groups.items()):
         assert len(rows) == 2, f"{gid}: expected 2 internal rows"
-        tol = total_tolerance(rows[0].currency, cfg)
+        ccy = rows[0].currency
+        tol = total_tolerance(ccy, cfg)
+        scores = set()
         edges = 0
         for a in rows:
             for b in rows:
-                net = b.gross_minor - fee_minor(b.gross_minor, b.currency, cfg)
+                net = b.gross_minor - actual_fee(b.gross_minor, ccy, cfg, b.fee_jitter)
                 if abs(a.gross_minor - net) <= tol:
                     edges += 1
+                    scores.add(abs(net - expected_net(a.gross_minor, ccy, cfg)))
         assert edges == 4, f"{gid}: expected 4 candidate edges, got {edges}"
+        assert len(scores) == 1, f"{gid}: members are distinguishable — not a trap"
         density = edges / 2
         assert not density > threshold, f"{gid}: would trip Hungarian"
         report.append({"group": gid, "edges": edges, "density": density})
     return report
 
 
-# --------------------------------------------------------------------------
-# writers
-# --------------------------------------------------------------------------
+
 def write_csv(path: str, cols: List[str], rows: List[dict]) -> None:
     with open(path, "w", newline="\n", encoding="utf-8") as fh:
         w = csv.DictWriter(fh, fieldnames=cols, lineterminator="\n")
@@ -559,10 +570,10 @@ def main(argv=None) -> int:
         json.dump(cl, fh, indent=2, sort_keys=True)
         fh.write("\n")
 
-    # ---- summary block (screenshot 01) ------------------------------------
     counts: Dict[str, int] = {}
     for t in truth:
         counts[t.fate] = counts.get(t.fate, 0) + 1
+    seen_internal_refs = {r["txn_ref"] for r in em.internal}
     print("=" * 72)
     print(f"SEED GENERATOR — date={a.date} seed={a.seed} rows={a.rows}")
     print("=" * 72)
@@ -585,6 +596,9 @@ def main(argv=None) -> int:
         print(f"dense block     : {r['block']} density={r['density']} "
               f"edges={r['edges']} records={r['records']} "
               f"greedy={r['greedy_pairs']} pairs / optimal={r['optimal_pairs']} pairs")
+    blinded = sum(1 for r in em.bank if r["txn_ref"] not in seen_internal_refs)
+    print(f"bank ref blinding: {blinded}/{len(em.bank)} bank rows carry a settlement "
+          f"ref (tier-3 population: amount+date matching only)")
     print(f"answer key rows : {len(em.answer_key)} (grain: source_system x txn_uid x leg)")
     print(f"tolerances      : " + " ".join(
         f"{c}={total_tolerance(c, cfg)}" for c in cfg["generator"]["currencies"]))
