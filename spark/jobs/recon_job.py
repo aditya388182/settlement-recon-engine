@@ -9,17 +9,19 @@ from datetime import datetime, timezone
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from pyspark.sql import DataFrame                                    
-from pyspark.sql import functions as F                            
+from pyspark.sql import DataFrame                                    # noqa: E402
+from pyspark.sql import functions as F                               # noqa: E402
 
-from spark.common.io import read_canonical                  
-from spark.common.session import (DEFAULT_CONFIG, build_spark,      
+from spark.common.io import read_canonical                           # noqa: E402
+from spark.common.session import (DEFAULT_CONFIG, build_spark,       # noqa: E402
                                   load_config)
-from spark.recon import blocking, exact_match, resolver, tolerant_match  
-from spark.recon.control_totals import (ControlTotalViolation,    
+from spark.recon import blocking, exact_match, resolver, tolerant_match  # noqa: E402
+from spark.recon.control_totals import (ControlTotalViolation,       # noqa: E402
                                         assert_control_totals)
-from spark.recon.output import write_recon_output                 
-from spark.recon.tolerance import derive_tolerances                  # noqa: E402 all the improts above
+from spark.recon import classifier                                   # noqa: E402
+from spark.recon.output import (write_recon_output,                  # noqa: E402
+                                write_summary)
+from spark.recon.tolerance import derive_tolerances                  # noqa: E402
 
 LEG_PROCESSOR = "PROCESSOR"
 LEG_BANK = "BANK"
@@ -121,12 +123,27 @@ def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
         if n:
             print(f"[dedupe] {s}: {n} duplicate suspect(s) routed out of matching")
 
-    blocked = {s: blocking.with_block_keys(clean[s], cfg).cache()
+    # Two blockings, on purpose. The ref-anchored passes get the adaptive
+    # prefix (the skew fix); tier 3 always uses the default prefix, because its
+    # pairs do not share a reference and a longer prefix would separate them.
+    blocked = {s: blocking.with_block_keys(clean[s], cfg, adaptive=True).cache()
                for s in ("internal", "processor", "bank")}
+    plain = {s: blocking.with_block_keys(clean[s], cfg, adaptive=False).cache()
+             for s in ("internal", "processor", "bank")}
     for s in ("internal", "processor", "bank"):
         blocking.block_stats(blocked[s], cfg, s)
 
     internal_refs = clean["internal"].select("txn_ref").distinct().cache()
+    # "does this row's ref exist on the other side of this leg?" is the single
+    # fact that separates AMOUNT_MISMATCH from MISSING_*. Computed once, from
+    # the canonical frames, and handed to the classifier as a boolean so the
+    # classifier stays a pure function of its input.
+    ref_sets = {
+        ("INTERNAL", LEG_PROCESSOR): canon["processor"].select("txn_ref").distinct(),
+        ("PROCESSOR", LEG_PROCESSOR): canon["internal"].select("txn_ref").distinct(),
+        ("INTERNAL", LEG_BANK): canon["bank"].select("txn_ref").distinct(),
+        ("BANK", LEG_BANK): canon["internal"].select("txn_ref").distinct(),
+    }
     tolerances = derive_tolerances(spark, cfg, business_date).cache()
     print(f"[tolerance] derived point-in-time as of business_date={business_date}:")
     tolerances.orderBy("currency").show(truncate=False)
@@ -150,10 +167,15 @@ def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
         print(f"[pass2 tolerant-T2:{leg}] {c2.count()} candidate(s) -> "
               f"{a2.count()} assignment(s)")
 
-        bl2 = bl.join(a2.select(F.col("l_txn_uid").alias("txn_uid")).distinct(),
-                      "txn_uid", "left_anti")
-        br2 = br.join(a2.select(F.col("r_txn_uid").alias("txn_uid")).distinct(),
-                      "txn_uid", "left_anti")
+        # tier 3 re-blocks on the default prefix (see blocking.py)
+        bl2 = (plain["internal"]
+               .join(l_res, "txn_uid", "left_semi")
+               .join(a2.select(F.col("l_txn_uid").alias("txn_uid")).distinct(),
+                     "txn_uid", "left_anti"))
+        br2 = (plain[right_src]
+               .join(r_res, "txn_uid", "left_semi")
+               .join(a2.select(F.col("r_txn_uid").alias("txn_uid")).distinct(),
+                     "txn_uid", "left_anti"))
         # Tier 3 is for counterparty rows whose reference cannot be resolved
         # against ANY internal reference — a settlement/batch ref rather than a
         # transaction id. A row that still carries a resolvable ref and did not
@@ -214,14 +236,26 @@ def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
     output = frames[0]
     for f in frames[1:]:
         output = output.unionByName(f)
-    output = output.withColumn("run_ts", F.lit(run_ts)).cache()
+    output = output.withColumn("run_ts", F.lit(run_ts))
+
+    tagged = []
+    for (src, leg), refs in ref_sets.items():
+        part = output.filter((F.col("source_system") == src) & (F.col("leg") == leg))
+        tagged.append(part.join(F.broadcast(refs.withColumn("_exists", F.lit(True))),
+                                "txn_ref", "left")
+                      .withColumn("counterpart_ref_exists",
+                                  F.coalesce(F.col("_exists"), F.lit(False)))
+                      .drop("_exists"))
+    output = tagged[0]
+    for t in tagged[1:]:
+        output = output.unionByName(t)
+    output = classifier.classify(output)
+    output = classifier.with_evidence(output).drop("counterpart_ref_exists").cache()
     print(f"[union] {output.count()} output rows at "
           f"(source_system, txn_uid, leg) grain")
-    (output.groupBy("leg", "match_state").count()
-     .orderBy("leg", "match_state").show(20, truncate=False))
-    (output.filter(F.col("method").isNotNull())
-     .groupBy("leg", "tier", "method").count()
-     .orderBy("leg", "tier", "method").show(20, truncate=False))
+    (output.groupBy("leg", "break_class", "match_state").count()
+     .orderBy("leg", "break_class", "match_state").show(30, truncate=False))
+    classifier.assert_evidence_complete(output)
 
     if chaos_drop_one:
         # The drop must hit the OUTPUT, after the union. Dropping a PAIR only
@@ -240,6 +274,8 @@ def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
 
     assert_control_totals(input_ledger, output, business_date)
     write_recon_output(output, cfg, business_date)
+    summary = write_summary(output, cfg, business_date)
+    summary.orderBy("leg", "break_class", "currency").show(40, truncate=False)
     return 0
 
 

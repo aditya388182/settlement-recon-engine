@@ -10,16 +10,11 @@ def storage_format(cfg: dict) -> str:
 
 def read_canonical(spark: SparkSession, cfg: dict, source: str,
                    business_date: str) -> DataFrame:
-    """Windowed canonical read. Returns canonical columns unchanged."""
+    """Read exactly the delivery for this run. Canonical columns unchanged."""
     root = cfg["paths"]["canonical"]
     df = spark.read.format(storage_format(cfg)).load(f"{root}/{source}/")
-    window_days = int(cfg["matching"]["settlement_window_days"])
-    if source == "bank":
-        return df.filter(
-            (F.col("business_date") >= F.lit(business_date).cast("date")) &
-            (F.col("business_date") <= F.date_add(
-                F.lit(business_date).cast("date"), window_days)))
-    return df.filter(F.col("business_date") == F.lit(business_date).cast("date"))
+    return (df.filter(F.col("delivery_date") == F.lit(business_date).cast("date"))
+              .drop("delivery_date"))
 
 
 def read_recon_output(spark: SparkSession, cfg: dict,

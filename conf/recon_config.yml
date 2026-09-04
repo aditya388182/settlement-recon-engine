@@ -1,7 +1,3 @@
-# Multi-Source Settlement Reconciliation Engine — single source of truth.
-# Nothing in this project hardcodes a tunable. Determinism depends on config
-# being versioned, not baked into code.
-
 run:
   rng_seed: 42
   business_date: "2026-07-06"
@@ -10,15 +6,20 @@ matching:
   settlement_window_days: 2          # T+2 max settlement lag
   ambiguity_density_threshold: 2.0   # candidates/record above which Hungarian activates
   block_prefix_len_default: 4
-  block_prefix_len_hot: 8            # adaptive prefix for hot counterparties (Day 4)
+  block_prefix_len_hot: 8
+  max_block_warn: 2500              # block-size guard: the Day-4 salt-list trigger.
+                                    # p99 on an ordinary date is ~150, so this is
+                                    # ~16x normal, not a hair trigger.            
   hot_counterparties: []             # salt list; populated Day 4, versioned here
+
 
 reference_data:
   version: "v1"
   valid_from: "2026-07-01"
   valid_to: "9999-12-31"
-  fee_jitter_max: 8
   epsilon_minor: 1
+  fee_jitter_max: 8                 # settlement rounding/tiering noise the fee
+                                    # model cannot explain; see D13
   fee_schedule:        # kind = FEE_SCHEDULE ; fee = min(gross*rate_bps//10000, max_fee_minor)
     USD: { rate_bps: 290, max_fee_minor: 300 }
     EUR: { rate_bps: 290, max_fee_minor: 300 }
@@ -29,8 +30,9 @@ reference_data:
     EUR: { decimals: 2, fx_rounding_minor: 1 }
     GBP: { decimals: 2, fx_rounding_minor: 1 }
     JPY: { decimals: 0, fx_rounding_minor: 1 }
-  # total_tolerance(ccy) = max_fee_minor + fx_rounding_minor + epsilon_minor
-  #   USD 302 | EUR 302 | GBP 252 | JPY 402
+  # total_tolerance(ccy) = max_fee_minor + fee_jitter_max + fx_rounding_minor
+  #                        + epsilon_minor
+  #   USD 310 | EUR 310 | GBP 260 | JPY 410
   # A formula that assumes 2 decimals everywhere inflates JPY 100x (40200) and
   # silently swallows real breaks. That is spark/tests/test_tolerance.py's case.
 
@@ -45,9 +47,10 @@ generator:
   amount_max_minor: 500000
   m2m_trap_groups: 20
   dense_blocks: 3
-  bank_ref_mode: "shared" 
-  bank_ref_blind_rate: 0.08           # shared = bank carries the internal txn_ref (plan default)
-                                     # batch  = bank carries "<MERCHANT>-B<7hex>" settlement ref
+  bank_ref_mode: "shared"            # shared = most bank rows carry the internal txn_ref
+                                     # batch  = ALL bank rows carry a settlement ref
+  bank_ref_blind_rate: 0.08          # share of ordinary bank rows given a settlement ref
+                                     # instead; trap + dense-block rows are always blinded
   rates:
     amount_mismatch: 0.05
     missing_in_processor: 0.01
@@ -62,6 +65,11 @@ paths:
   reference_data: "s3a://recon-lake/reference_data"
   recon_output: "s3a://recon-lake/recon_output"
   recon_summary: "s3a://recon-lake/recon_summary"
+
+storage:
+  # "delta" everywhere real. The only reason this is a knob is that CI and local
+  # module tests run without MinIO, and Day 4's replaceWhere asserts delta.
+  format: "delta"
 
 spark:
   shuffle_partitions: 8

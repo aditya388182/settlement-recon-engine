@@ -1,16 +1,4 @@
 #!/usr/bin/env python3
-"""canonicalize_job.py — landing CSVs -> canonical Delta tables.
-
-Day 1 only. No matching, no classification, no control totals. The single claim
-this job makes is: the canonical tables carry exactly the values the generator
-emitted, in a different representation.
-
-    python spark/jobs/canonicalize_job.py --date 2026-07-06
-
-Reads   s3a://recon-landing/<date>/{internal,processor,bank}_<date>.csv
-Writes  s3a://recon-lake/canonical/{internal,processor,bank}/  (Delta, partitioned
-        by business_date so Day 2 can read a window without a full scan)
-"""
 from __future__ import annotations
 
 import argparse
@@ -20,6 +8,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
+from pyspark.sql import functions as F                             # noqa: E402
+from spark.common.io import storage_format                         # noqa: E402
 from spark.common.session import build_spark, load_config          # noqa: E402
 from spark.recon.canonicalize import canonicalize, SOURCE_SCHEMAS  # noqa: E402
 
@@ -37,6 +27,7 @@ def main(argv=None) -> int:
     landing = a.landing or cfg["paths"]["landing"]
     canonical_root = a.lake or cfg["paths"]["canonical"]
 
+    fmt = storage_format(cfg)
     spark = build_spark(f"canonicalize-{a.date}", cfg)
     try:
         for src in SOURCES:
@@ -45,12 +36,22 @@ def main(argv=None) -> int:
                    .option("header", "true")
                    .schema(SOURCE_SCHEMAS[src])   # never inferSchema on money
                    .csv(path))
-            canon = canonicalize(raw, src)
-            (canon.write.format("delta")
-             .mode("overwrite")
-             .partitionBy("business_date")
-             .save(f"{canonical_root}/{src}/"))
-            n = spark.read.format("delta").load(f"{canonical_root}/{src}/").count()
+            # delivery_date = the date of the FILE we were sent, which is what
+            # a run owns. A bank delivery for D legitimately contains rows whose
+            # own business_date is D+1 or D+2 (settlement lag); those rows still
+            # belong to D's reconciliation, because D is when they arrived.
+            canon = canonicalize(raw, src).withColumn(
+                "delivery_date", F.lit(a.date).cast("date"))
+            writer = (canon.write.format(fmt).mode("overwrite")
+                      .partitionBy("delivery_date"))
+            if fmt == "delta":
+                writer = writer.option("replaceWhere",
+                                       f"delivery_date = '{a.date}'")
+            else:
+                spark.conf.set("spark.sql.sources.partitionOverwriteMode",
+                               "dynamic")
+            writer.save(f"{canonical_root}/{src}/")
+            n = canon.count()
             print(f"canonical/{src}: {n} rows written")
         print("canonicalization complete — run scripts/verify_day1.py next")
         return 0

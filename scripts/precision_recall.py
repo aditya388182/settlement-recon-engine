@@ -7,8 +7,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pyspark.sql import functions as F                                
-from spark.common.io import read_recon_output, storage_format       
+from pyspark.sql import functions as F                                # noqa: E402
+from spark.common.io import read_recon_output, storage_format         # noqa: E402
 from spark.common.session import (DEFAULT_CONFIG, build_spark,        # noqa: E402
                                   load_config)
 
@@ -102,7 +102,7 @@ def main(argv=None) -> int:
                   n_miss == 0, n_miss)
 
         tim = j.filter((F.col("expected_class") == "TIMING_DIFFERENCE") & matched)
-        bad_t = tim.filter(F.coalesce(F.col("date_diff"), F.lit(0)) == 0).count()
+        bad_t = tim.filter(F.coalesce(F.col("evidence.date_diff"), F.lit(0)) == 0).count()
         r.add("C7", f"TIMING_DIFFERENCE rows carry date_diff > 0 ({tim.count()})",
               bad_t == 0, bad_t)
 
@@ -126,7 +126,7 @@ def main(argv=None) -> int:
 
         hung = j.filter(F.col("expects_hungarian") == "true")
         n_h = hung.count()
-        not_h = hung.filter(F.coalesce(F.col("method"), F.lit("")) != "HUNGARIAN").count()
+        not_h = hung.filter(F.coalesce(F.col("evidence.method"), F.lit("")) != "HUNGARIAN").count()
         r.add("C9", f"expects_hungarian rows decided by HUNGARIAN ({n_h})",
               n_h > 0 and not_h == 0, not_h)
 
@@ -147,12 +147,24 @@ def main(argv=None) -> int:
         else:
             print("C10 skipped — pass --greedy-output-path to enable it")
 
-        print("\nexpected_class x match_state:")
-        (j.groupBy("leg", "expected_class").pivot("match_state").count()
+        wrong_class = j.filter(F.col("break_class") != F.col("expected_class"))
+        n_wc = wrong_class.count()
+        if n_wc:
+            (wrong_class.groupBy("leg", "expected_class", "break_class")
+             .count().orderBy(F.desc("count")).show(30, truncate=False))
+        r.add("C11", f"break_class == expected_class on every row ({j.count()})",
+              n_wc == 0, n_wc)
+
+        n_ev = j.filter((F.col("break_class") != "MATCHED") &
+                        F.col("evidence").isNull()).count()
+        r.add("C12", "non-MATCHED rows carry evidence", n_ev == 0, n_ev)
+
+        print("\nexpected_class x break_class:")
+        (j.groupBy("leg", "expected_class").pivot("break_class").count()
            .na.fill(0).orderBy("leg", "expected_class").show(40, truncate=False))
         print("tier x method (matched rows only):")
-        (j.filter(matched).groupBy("leg", "tier", "method").count()
-           .orderBy("leg", "tier", "method").show(20, truncate=False))
+        (j.filter(matched).groupBy("leg", "evidence.tier", "evidence.method")
+           .count().orderBy("leg", "tier", "method").show(20, truncate=False))
     finally:
         r.render()
         spark.stop()
