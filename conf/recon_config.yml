@@ -13,14 +13,6 @@ matching:
   block_prefix_len_hot: 8            # adaptive prefix for hot counterparties (Day 4)
   hot_counterparties: []             # salt list; populated Day 4, versioned here
 
-# ---------------------------------------------------------------------------
-# DAY-1 DECISION #3: reference-data parameters live HERE, not in a script.
-# scripts/seed_generator.py and scripts/seed_reference_data.py BOTH read this
-# block. The generator must corrupt AMOUNT_MISMATCH rows "beyond tolerance",
-# and tolerance = f(fee schedule). If the generator invented its own numbers,
-# Day 3's derived tolerance would silently disagree with Day 1's corruption
-# and the whole answer key would be a lie.
-# ---------------------------------------------------------------------------
 reference_data:
   version: "v1"
   valid_from: "2026-07-01"
