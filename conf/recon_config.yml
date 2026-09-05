@@ -10,7 +10,7 @@ matching:
   max_block_warn: 2500              # block-size guard: the Day-4 salt-list trigger.
                                     # p99 on an ordinary date is ~150, so this is
                                     # ~16x normal, not a hair trigger.            
-  hot_counterparties: [M007]             # salt list; populated Day 4, versioned here
+  hot_counterparties: []             # salt list; populated Day 4, versioned here
 
 
 reference_data:
