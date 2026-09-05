@@ -1,0 +1,7 @@
+T-5 baseline — recorded BEFORE v2 was written
+date:        2026-07-06
+seed:        42
+rows:        39884
+sha256:      efca74a30252c223d9a0aa5c61bb119b3924df1beb0c9fe7551aed71bc1d86a5
+recorded_at: 2026-09-05T21:05:11Z
+note:        this number is the assertion the rest of the morning is against
