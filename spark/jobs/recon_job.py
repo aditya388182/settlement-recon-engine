@@ -97,7 +97,7 @@ def _exact_as_assignments(pairs: DataFrame) -> DataFrame:
 
 
 def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
-        force_greedy: bool = False) -> int:
+        force_greedy: bool = False, ignore_point_in_time: bool = False) -> int:
     """cfg["paths"]["recon_output"] may have been overridden by --output-path so
     the force-greedy comparison run can be written somewhere the harness can
     diff it against the real one."""
@@ -144,7 +144,8 @@ def run(spark, cfg: dict, business_date: str, chaos_drop_one: bool = False,
         ("INTERNAL", LEG_BANK): canon["bank"].select("txn_ref").distinct(),
         ("BANK", LEG_BANK): canon["internal"].select("txn_ref").distinct(),
     }
-    tolerances = derive_tolerances(spark, cfg, business_date).cache()
+    tolerances = derive_tolerances(spark, cfg, business_date,
+                                   point_in_time=not ignore_point_in_time).cache()
     print(f"[tolerance] derived point-in-time as of business_date={business_date}:")
     tolerances.orderBy("currency").show(truncate=False)
 
@@ -289,6 +290,10 @@ def main(argv=None) -> int:
     p.add_argument("--output-path", default=None,
                    help="override paths.recon_output (used for the force-greedy "
                         "comparison run)")
+    p.add_argument("--ignore-point-in-time", action="store_true",
+                   help="NEGATIVE CONTROL for the T-5 proof: use the current "
+                        "reference version instead of the one in force on the "
+                        "run's business date. The output must diverge.")
     p.add_argument("--force-greedy", action="store_true",
                    help="disable the Hungarian fallback (threshold -> infinity). "
                         "The harness uses this to prove greedy differs on the "
@@ -300,7 +305,8 @@ def main(argv=None) -> int:
         cfg["paths"]["recon_output"] = a.output_path
     spark = build_spark(f"recon-{a.date}", cfg)
     try:
-        return run(spark, cfg, a.date, a.chaos_drop_one, a.force_greedy)
+        return run(spark, cfg, a.date, a.chaos_drop_one, a.force_greedy,
+                   a.ignore_point_in_time)
     except ControlTotalViolation as e:
         print(f"\nControlTotalViolation: {e}", file=sys.stderr)
         print("NOTHING WAS WRITTEN. The previous partition is untouched.",

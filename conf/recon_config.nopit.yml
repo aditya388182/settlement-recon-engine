@@ -1,0 +1,81 @@
+# Negative-control overlay for the T-5 proof.
+#
+# Identical semantics to conf/recon_config.yml except recon_output points at
+# the partition written by:
+#
+#     python spark/jobs/recon_job.py --date 2026-07-06 --ignore-point-in-time \
+#       --output-path s3a://recon-lake/recon_output_nopit
+#
+# byte_identity_check.py --skip-runs --config conf/recon_config.nopit.yml
+# then hashes THAT path. If this file were identical to recon_config.yml,
+# --skip-runs would hash the point-in-time partition and the control would
+# "pass" for the wrong reason.
+#
+# Do not flip ignore_point_in_time here. That flag is a job argument
+# (decision D23), not a config knob — same discipline as --chaos-drop-one.
+
+run:
+  rng_seed: 42
+  business_date: "2026-07-06"
+
+matching:
+  settlement_window_days: 2
+  ambiguity_density_threshold: 2.0
+  block_prefix_len_default: 4
+  block_prefix_len_hot: 8
+  max_block_warn: 2500
+  hot_counterparties: []
+
+reference_data:
+  version: "v1"
+  valid_from: "2026-07-01"
+  valid_to: "9999-12-31"
+  epsilon_minor: 1
+  fee_jitter_max: 8
+  fee_schedule:
+    USD: { rate_bps: 290, max_fee_minor: 300 }
+    EUR: { rate_bps: 290, max_fee_minor: 300 }
+    GBP: { rate_bps: 290, max_fee_minor: 250 }
+    JPY: { rate_bps: 290, max_fee_minor: 400 }
+  fx_precision:
+    USD: { decimals: 2, fx_rounding_minor: 1 }
+    EUR: { decimals: 2, fx_rounding_minor: 1 }
+    GBP: { decimals: 2, fx_rounding_minor: 1 }
+    JPY: { decimals: 0, fx_rounding_minor: 1 }
+
+generator:
+  currencies: [USD, EUR, GBP, JPY]
+  merchant_count: 25
+  main_merchants: [M001, M002, M003, M004, M005, M006, M007, M008, M009, M010,
+                   M011, M012, M013, M014, M015, M016, M017, M018, M019, M020]
+  trap_merchants: [M021, M022]
+  dense_merchants: [M023, M024, M025]
+  amount_min_minor: 500
+  amount_max_minor: 500000
+  m2m_trap_groups: 20
+  dense_blocks: 3
+  bank_ref_mode: "shared"
+  bank_ref_blind_rate: 0.08
+  rates:
+    amount_mismatch: 0.05
+    missing_in_processor: 0.01
+    missing_in_bank: 0.01
+    duplicate: 0.01
+    timing_difference: 0.03
+
+paths:
+  landing: "s3a://recon-landing"
+  lake: "s3a://recon-lake"
+  canonical: "s3a://recon-lake/canonical"
+  reference_data: "s3a://recon-lake/reference_data"
+  recon_output: "s3a://recon-lake/recon_output_nopit"
+  recon_summary: "s3a://recon-lake/recon_summary_nopit"
+
+storage:
+  format: "delta"
+
+spark:
+  shuffle_partitions: 8
+  s3_endpoint: "http://localhost:9000"
+  s3_access_key: "minioadmin"
+  s3_secret_key: "minioadmin"
