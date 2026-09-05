@@ -1,20 +1,4 @@
 #!/usr/bin/env python3
-"""upload_landing.py — put the day's source files into the MinIO landing zone.
-
-This is the prefix the Day-5 S3KeySensors watch, so the key layout is a
-contract, not a convenience:
-
-    recon-landing/<business_date>/internal_<business_date>.csv
-    recon-landing/<business_date>/processor_<business_date>.csv
-    recon-landing/<business_date>/bank_<business_date>.csv
-    recon-landing/<business_date>/manifest_<business_date>.json
-
-Uses boto3 against the MinIO endpoint from conf/recon_config.yml rather than the
-`mc` container, so it does not depend on the compose network name and can be
-run from the same venv as everything else.
-
-    python scripts/upload_landing.py --date 2026-07-06
-"""
 from __future__ import annotations
 
 import argparse
