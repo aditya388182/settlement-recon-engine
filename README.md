@@ -45,6 +45,8 @@ Everything else in this README exists to make those two mechanisms trustworthy.
 
 ## Architecture Overview
 
+![Architecture Diagram](docs/screenshots/architecture.png)
+
 ```text
  scripts/seed_generator.py   ← truth table FIRST, then three derived views
         │  internal (gross) · processor (gross + itemised fee) · bank (NET deposit)
