@@ -8,14 +8,12 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
-from pyspark.sql import functions as F                             # noqa: E402
-from spark.common.io import storage_format                         # noqa: E402
-from spark.common.session import (DEFAULT_CONFIG, build_spark,      # noqa: E402
-                                  load_config)
-from spark.recon.canonicalize import canonicalize, SOURCE_SCHEMAS  # noqa: E402
+from pyspark.sql import functions as F
+from spark.common.io import storage_format
+from spark.common.session import (DEFAULT_CONFIG, build_spark, load_config)
+from spark.recon.canonicalize import canonicalize, SOURCE_SCHEMAS
 
 SOURCES = ("internal", "processor", "bank")
-
 
 def main(argv=None) -> int:
     p = argparse.ArgumentParser()
@@ -26,22 +24,28 @@ def main(argv=None) -> int:
     a = p.parse_args(argv)
 
     cfg = load_config(a.config)
-    landing = a.landing or cfg["paths"]["landing"]
+    
+    # If the user passed explicit CLI paths, use them. 
+    # Otherwise, fall back to the paths defined in whichever config file they specified.
+    landing = a.landing or cfg["paths"]["landing_zone"] if "landing_zone" in cfg["paths"] else cfg["paths"]["landing"]
     canonical_root = a.lake or cfg["paths"]["canonical"]
 
     fmt = storage_format(cfg)
     spark = build_spark(f"canonicalize-{a.date}", cfg)
     try:
         for src in SOURCES:
-            path = f"{landing}/{a.date}/{src}_{a.date}.csv"
+            # We must handle both the S3 partition structure (landing_zone/src/...) 
+            # and the local CI structure (/tmp/ci/landing/...)
+            if landing.startswith("s3a://"):
+                path = f"{landing}/{src}/{src}_{a.date}.csv"
+            else:
+                path = f"{landing}/{a.date}/{src}_{a.date}.csv"
+                
             raw = (spark.read
                    .option("header", "true")
-                   .schema(SOURCE_SCHEMAS[src])   # never inferSchema on money
+                   .schema(SOURCE_SCHEMAS[src])
                    .csv(path))
-            # delivery_date = the date of the FILE we were sent, which is what
-            # a run owns. A bank delivery for D legitimately contains rows whose
-            # own business_date is D+1 or D+2 (settlement lag); those rows still
-            # belong to D's reconciliation, because D is when they arrived.
+            
             canon = canonicalize(raw, src).withColumn(
                 "delivery_date", F.lit(a.date).cast("date"))
             writer = (canon.write.format(fmt).mode("overwrite")
@@ -59,7 +63,6 @@ def main(argv=None) -> int:
         return 0
     finally:
         spark.stop()
-
 
 if __name__ == "__main__":
     raise SystemExit(main())
