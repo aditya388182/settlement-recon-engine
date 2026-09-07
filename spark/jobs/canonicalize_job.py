@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
 
 from pyspark.sql import functions as F                             # noqa: E402
 from spark.common.io import storage_format                         # noqa: E402
-from spark.common.session import build_spark, load_config          # noqa: E402
+from spark.common.session import (DEFAULT_CONFIG, build_spark,      # noqa: E402
+                                  load_config)
 from spark.recon.canonicalize import canonicalize, SOURCE_SCHEMAS  # noqa: E402
 
 SOURCES = ("internal", "processor", "bank")
@@ -21,9 +22,10 @@ def main(argv=None) -> int:
     p.add_argument("--date", required=True)
     p.add_argument("--landing", default=None, help="override paths.landing")
     p.add_argument("--lake", default=None, help="override paths.canonical")
+    p.add_argument("--config", default=DEFAULT_CONFIG)
     a = p.parse_args(argv)
 
-    cfg = load_config()
+    cfg = load_config(a.config)
     landing = a.landing or cfg["paths"]["landing"]
     canonical_root = a.lake or cfg["paths"]["canonical"]
 

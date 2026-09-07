@@ -1,18 +1,4 @@
 #!/usr/bin/env python3
-"""verify_day1.py — assert, do not eyeball.
-
-The generator printed a control line (rows and sum(amount_minor) per currency
-per source). The canonical Delta tables must reproduce it to the minor unit.
-Any drift means canonicalization changed a VALUE, not just a representation,
-and Day 1 has failed.
-
-Also re-checks the answer-key inventory so a silently-regenerated fixture with
-the wrong seed cannot pass.
-
-    python scripts/verify_day1.py --date 2026-07-06
-
-Exit code 0 only if every assertion passes. Non-zero is a hard Day-1 failure.
-"""
 from __future__ import annotations
 
 import argparse
@@ -23,7 +9,8 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from pyspark.sql import functions as F                    # noqa: E402
-from spark.common.session import build_spark, load_config  # noqa: E402
+from spark.common.session import (DEFAULT_CONFIG, build_spark,  # noqa: E402
+                                  load_config)
 
 SOURCES = ("internal", "processor", "bank")
 
@@ -32,9 +19,10 @@ def main(argv=None) -> int:
     p = argparse.ArgumentParser()
     p.add_argument("--date", required=True)
     p.add_argument("--fixtures", default="data/fixtures")
+    p.add_argument("--config", default=DEFAULT_CONFIG)
     a = p.parse_args(argv)
 
-    cfg = load_config()
+    cfg = load_config(a.config)
     canonical_root = cfg["paths"]["canonical"]
     with open(os.path.join(a.fixtures, f"control_line_{a.date}.json"),
               encoding="utf-8") as fh:
@@ -65,7 +53,6 @@ def main(argv=None) -> int:
                       f"{exp['sum_amount_minor']:>18}{act_s:>18}  "
                       f"{'PASS' if ok else 'FAIL'}")
 
-        # ---- no floats, no nulls, no lost precision -----------------------
         for src in SOURCES:
             df = spark.read.format("delta").load(f"{canonical_root}/{src}/")
             dtype = dict(df.dtypes)["amount_minor"]
@@ -76,7 +63,6 @@ def main(argv=None) -> int:
             if nulls:
                 failures.append(f"{src}: {nulls} rows with null key/amount")
 
-        # ---- answer-key inventory ----------------------------------------
         key = (spark.read.option("header", "true")
                .csv(os.path.join(a.fixtures, f"answer_key_{a.date}.csv")))
         print("-" * 82)

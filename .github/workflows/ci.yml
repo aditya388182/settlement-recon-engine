@@ -1,0 +1,155 @@
+name: ci
+
+
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+env:
+  PYTHON_VERSION: "3.11"        
+  CI_CONFIG: conf/recon_config.ci.yml
+  CI_DATE: "2026-07-06"
+
+jobs:
+  unit-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: pip install -r requirements-spark.txt
+      - run: python -m pytest spark/tests/ -v
+
+  fixture-matcher-gate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - run: pip install -r requirements-spark.txt
+
+      
+      - uses: actions/cache@v4
+        with:
+          path: ~/.ivy2
+          key: ivy-${{ hashFiles('spark/common/session.py') }}
+
+      - name: Stage the committed fixture as a local landing zone
+        run: |
+          mkdir -p /tmp/ci/landing/${{ env.CI_DATE }}
+          cp data/fixtures/ci_mini/{internal,processor,bank}_${{ env.CI_DATE }}.csv \
+             /tmp/ci/landing/${{ env.CI_DATE }}/
+
+      - name: Seed reference data and canonicalize
+        run: |
+          python scripts/seed_reference_data.py --version v1 --config $CI_CONFIG
+          python spark/jobs/canonicalize_job.py --date $CI_DATE --config $CI_CONFIG
+
+      - name: Run the engine (run 1)
+        run: python spark/jobs/recon_job.py --date $CI_DATE --config $CI_CONFIG
+
+      - name: Assert the Hungarian fallback activated on the dense block
+        run: |
+          python spark/jobs/recon_job.py --date $CI_DATE --config $CI_CONFIG \
+            2>&1 | tee /tmp/run2.log
+          grep -q "HUNGARIAN activated block=" /tmp/run2.log \
+            || { echo "::error::Hungarian fallback never activated on the seeded dense block"; exit 1; }
+
+      - name: Byte-identity — two engine runs must hash identically
+        run: |
+          python scripts/byte_identity_check.py --date $CI_DATE --config $CI_CONFIG
+
+      - name: Greedy comparison run
+        run: |
+          python spark/jobs/recon_job.py --date $CI_DATE --config $CI_CONFIG \
+            --force-greedy --output-path file:///tmp/ci/lake/recon_output_greedy
+
+      - name: Correctness harness — per-class P/R, traps, Hungarian, evidence
+        run: |
+          python scripts/precision_recall.py --date $CI_DATE --config $CI_CONFIG \
+            --fixtures data/fixtures/ci_mini \
+            --greedy-output-path file:///tmp/ci/lake/recon_output_greedy
+
+      - name: Fail-closed — sabotage must abort and leave the partition intact
+        run: python scripts/drop_record_test.py --date $CI_DATE --config $CI_CONFIG
+
+  dag-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - name: Install Airflow with the official constraints
+        run: |
+          AIRFLOW_VERSION=2.9.3
+          pip install "apache-airflow==${AIRFLOW_VERSION}" \
+                      apache-airflow-providers-amazon \
+            --constraint "https://raw.githubusercontent.com/apache/airflow/constraints-${AIRFLOW_VERSION}/constraints-${{ env.PYTHON_VERSION }}.txt"
+      - name: DagBag must import cleanly
+        env:
+          AIRFLOW_HOME: /tmp/airflow_home
+          AIRFLOW__CORE__LOAD_EXAMPLES: "False"
+        run: |
+          python - <<'PY'
+          from airflow.models import DagBag
+          bag = DagBag(dag_folder="airflow/dags", include_examples=False)
+          assert bag.import_errors == {}, bag.import_errors
+          dag = bag.dags["recon_daily"]
+          assert len(dag.tasks) == 10, f"expected 10 tasks, got {len(dag.tasks)}"
+          for t in dag.tasks:
+              if type(t).__name__ == "S3KeySensor":
+                  assert t.mode == "reschedule", f"{t.task_id} would starve the executor"
+          print(f"{dag.dag_id}: {len(dag.tasks)} tasks, no import errors")
+          PY
+
+  ge-and-terraform:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          cache: pip
+      - run: pip install -r requirements-ge.txt pandas pyyaml
+      - name: GE suites must parse and pass on the committed fixture
+        run: |
+          for s in internal processor bank; do
+            python great_expectations/run_checkpoint.py --source $s --date $CI_DATE \
+              --fixtures data/fixtures/ci_mini --manifests data/fixtures/ci_mini
+          done
+      - name: A truncated file must fail the gate
+        run: |
+          mkdir -p /tmp/poison
+          cp data/fixtures/ci_mini/*.csv data/fixtures/ci_mini/manifest_*.json /tmp/poison/
+          head -n 400 data/fixtures/ci_mini/bank_${CI_DATE}.csv > /tmp/poison/bank_${CI_DATE}.csv
+          if python great_expectations/run_checkpoint.py --source bank --date $CI_DATE \
+               --fixtures /tmp/poison --manifests /tmp/poison; then
+            echo "::error::the GE gate passed a truncated file"; exit 1
+          fi
+          echo "gate correctly rejected the truncated file"
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: "1.9.5"
+      - name: terraform plan on the documented stub
+        working-directory: terraform
+        run: |
+          terraform init -backend=false
+          terraform validate
+          terraform plan -input=false

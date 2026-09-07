@@ -1,0 +1,224 @@
+{
+  "uid": "recon-break-trends",
+  "title": "Reconciliation \u2014 Break Trends",
+  "description": "Break counts and break value by class over time, with an anomaly band.",
+  "schemaVersion": 39,
+  "version": 1,
+  "editable": true,
+  "refresh": "30s",
+  "tags": [
+    "reconciliation"
+  ],
+  "time": {
+    "from": "now-30d",
+    "to": "now"
+  },
+  "timezone": "utc",
+  "panels": [
+    {
+      "id": 1,
+      "type": "timeseries",
+      "title": "Break count by class",
+      "description": "Stacked break counts. A step change in one class is the signal; a step change across all of them is usually a late or partial file.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "recon-prom"
+      },
+      "gridPos": {
+        "h": 9,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "recon-prom"
+          },
+          "expr": "sum by (class) (recon_break_count{class!=\"MATCHED\"})",
+          "legendFormat": "{{class}}",
+          "refId": "A",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "auto",
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 2,
+      "type": "timeseries",
+      "title": "Break amount (minor units)",
+      "description": "Total money sitting in a non-MATCHED state.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "recon-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "recon-prom"
+          },
+          "expr": "recon_break_amount_minor_total",
+          "legendFormat": "break $",
+          "refId": "A",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "type": "timeseries",
+      "title": "Anomaly band: break count vs trailing avg + 3 sigma",
+      "description": "Crossing the band is the break_count_spike runbook's entry point.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "recon-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 9
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "recon-prom"
+          },
+          "expr": "sum(recon_break_count{class!=\"MATCHED\"})",
+          "legendFormat": "breaks",
+          "refId": "A",
+          "instant": false
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "recon-prom"
+          },
+          "expr": "avg_over_time(sum(recon_break_count{class!=\"MATCHED\"})[7d:1d]) + 3 * stddev_over_time(sum(recon_break_count{class!=\"MATCHED\"})[7d:1d])",
+          "legendFormat": "trailing avg + 3\u03c3",
+          "refId": "B",
+          "instant": false
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 0,
+            "showPoints": "auto"
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      }
+    },
+    {
+      "id": 4,
+      "type": "table",
+      "title": "Break count by class and currency",
+      "description": "Latest run. AMOUNT_MISMATCH clustering in one currency points at a fee-schedule version bug.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "recon-prom"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 17
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "recon-prom"
+          },
+          "expr": "recon_break_count{class!=\"MATCHED\"}",
+          "refId": "A",
+          "instant": true,
+          "format": "table"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "showHeader": true
+      }
+    }
+  ],
+  "templating": {
+    "list": []
+  },
+  "annotations": {
+    "list": []
+  }
+}

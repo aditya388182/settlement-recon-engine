@@ -1,16 +1,3 @@
-# Day-1 stack: MinIO (object store) + bucket bootstrap + Postgres (Airflow
-# metadata DB, provisioned now because it is cheap and Day 5 needs it).
-# Prometheus / Grafana / pushgateway are added on Day 6.
-#
-# Container names are prefixed `recon-` on purpose: Project 1's compose file
-# almost certainly already claims the name `minio`, and Docker refuses to start
-# a second container with the same name even when the ports are free.
-#
-# Host ports 9000/9001 are the same ones Project 1 uses. On a 16GB machine do
-# NOT run both stacks at once — that is a deliberate constraint, not an
-# accident. Stop Project 1 first:
-#   docker compose -f ../../payments-cdc-pipeline/infra/docker-compose.yml down
-
 name: recon
 
 services:
@@ -63,6 +50,39 @@ services:
       timeout: 3s
       retries: 20
 
+  pushgateway:
+    image: prom/pushgateway:v1.9.0
+    container_name: recon-pushgateway
+    ports:
+      - "9091:9091"
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    container_name: recon-prometheus
+    depends_on: [pushgateway]
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - recon-prom-data:/prometheus
+
+  grafana:
+    image: grafana/grafana:11.2.0
+    container_name: recon-grafana
+    depends_on: [prometheus]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./grafana/dashboards:/var/lib/grafana/dashboards:ro
+      - recon-grafana-data:/var/lib/grafana
+
 volumes:
   recon-minio-data:
   recon-pg-data:
+  recon-prom-data:
+  recon-grafana-data:

@@ -1,0 +1,9 @@
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: pushgateway
+    honor_labels: true          # keep the job/instance labels the pusher set
+    static_configs:
+      - targets: ["pushgateway:9091"]
